@@ -1,0 +1,36 @@
+# Vivado project files (generated)
+*.jou
+*.log
+*.str
+*.backup.jou
+*.backup.log
+*.debug_log
+vivado_*
+.vivado/
+*.Xil/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.cache/
+*.gen/
+*.runs/
+*.tmp/
+
+# Vivado webtalk
+webtalk*.log
+usage_statistics_webtalk.*
+
+# Modelsim/Questa
+work/
+vsim.wlf
+transcript
+vlog.opt
+*.vstf
+modelsim.ini
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

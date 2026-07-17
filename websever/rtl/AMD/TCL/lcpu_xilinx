@@ -1,0 +1,4 @@
+open_hw_manager
+connect_hw_server
+open_hw_target [lindex [get_hw_targets] 0]
+refresh_hw_device
