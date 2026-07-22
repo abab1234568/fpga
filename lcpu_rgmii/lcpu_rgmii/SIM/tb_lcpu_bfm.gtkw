@@ -1,0 +1,31 @@
+[*]
+[*] GTKWave Analyzer v3.3.104 (w)1999-2020 BSI
+[*] Sun Jul 20 21:55:00 2026
+[dumpfile] "tb_lcpu_bfm.vcd"
+[savefile] "tb_lcpu_bfm.gtkw"
+[timestart] 0
+[zoom] 100000000
+[span] 800000000
+[size] 1920 1080
+[windowtitle] "LCPU BFM write_cpu_pkt — Write + Loopback Verify"
+[pos] -1 -1
+[sstexpanded] 1
+[sstsignals] 8
+@28
+tb_lcpu_bfm.clk
+@22
+tb_lcpu_bfm.rst_n
+@420
+tb_lcpu_bfm.u_dut.exe
+@420
+tb_lcpu_bfm.u_dut.rh_wl
+@420
+tb_lcpu_bfm.u_dut.op_done
+@28
+tb_lcpu_bfm.u_dut.address[31:0]
+@28
+tb_lcpu_bfm.u_dut.wr_data[31:0]
+@28
+tb_lcpu_bfm.u_dut.rd_data[31:0]
+[pattern_trace] 1
+[pattern_trace] 0

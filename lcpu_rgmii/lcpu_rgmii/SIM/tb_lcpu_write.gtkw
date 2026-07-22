@@ -1,0 +1,60 @@
+[*]
+[*] GTKWave Analyzer v3.3
+[*] Tue Jul 22 14:30:00 2026
+[dumpfile] "tb_lcpu_write.vcd"
+[savefile] "tb_lcpu_write.gtkw"
+[timestart] 0
+[zoom] 50
+[size] 1920 1080
+[fontname] "Monospace 10"
+[signal_stdout] 0
+[pattern_trace] 1
+[pattern_trace_max_pad] 128
+
+[treeopen] tb_lcpu_write
+
+#==== LCPU 总线信号 (cpu_clk 50MHz) ====
+[treeopen] LCPU_Bus
+[color] cycle
+tb_lcpu_write.cpu_clk
+tb_lcpu_write.reset_l
+tb_lcpu_write.lcpu_req
+tb_lcpu_write.lcpu_rh_wl
+tb_lcpu_write.lcpu_address[31:0]
+tb_lcpu_write.lcpu_wdata[31:0]
+tb_lcpu_write.lcpu_rdata[31:0]
+tb_lcpu_write.lcpu_ack
+
+#==== CPU 写寄存器输出 (cpu_clk → cpu_channel) ====
+[treeopen] CPU_Write_Path
+tb_lcpu_write.cpu_wr_wen
+tb_lcpu_write.cpu_wr_waddr_32[31:0]
+tb_lcpu_write.cpu_wr_wdata_32[31:0]
+tb_lcpu_write.cpu_wr_wpkt_len_32[31:0]
+tb_lcpu_write.cpu_wr_wpkt_push
+tb_lcpu_write.cpu_wr_full
+
+#==== MAC TX 输出 (clk 125MHz) ====
+[treeopen] MAC_TX
+tb_lcpu_write.clk
+tb_lcpu_write.mac_tx_sop
+tb_lcpu_write.mac_tx_en
+tb_lcpu_write.mac_tx_data[7:0]
+tb_lcpu_write.mac_tx_eop
+tb_lcpu_write.mac_tx_err
+
+#==== TX 帧捕获 ====
+[treeopen] TX_Capture
+tb_lcpu_write.cap_ev
+tb_lcpu_write.cap_len[11:0]
+tb_lcpu_write.cap_act
+tb_lcpu_write.cap_idx[11:0]
+
+#==== 读路径 (可选) ====
+[treeopen] CPU_Read_Path
+tb_lcpu_write.cpu_rd_empty
+tb_lcpu_write.cpu_rd_rpkt_pop
+tb_lcpu_write.cpu_rd_rpkt_len[11:0]
+tb_lcpu_write.cpu_rd_ren
+tb_lcpu_write.cpu_rd_raddr[10:0]
+tb_lcpu_write.cpu_rd_rdata[7:0]

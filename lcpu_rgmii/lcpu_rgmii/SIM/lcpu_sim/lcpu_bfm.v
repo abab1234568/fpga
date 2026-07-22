@@ -11,9 +11,10 @@ module lcpu_bfm #(parameter delay_time = 1000) (
     reg [31:0] temp_addr, temp_data;
 
     initial begin
-        file = $fopen("read.tcl", "r");
-        if (file == 0) file = $fopen("lcpu_sim/read.tcl", "r");
-        if (file == 0) begin $display("BFM: Error opening read.tcl"); $finish; end
+        file = $fopen("test_cmds.txt", "r");
+        if (file == 0) file = $fopen("lcpu_sim/test_cmds.txt", "r");
+        if (file == 0) file = $fopen("/home/huamingh/work/FPGA_Prj/test/lcpu_rgmii/lcpu_sim/test_cmds.txt", "r");
+        if (file == 0) begin $display("BFM: Error opening test_cmds.txt"); $finish; end
 
         ADDRESS=0; WR_DATA=0; RH_WL=1; EXEC=0;
         #delay_time;

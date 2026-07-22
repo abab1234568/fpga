@@ -161,3 +161,81 @@
 | `lcpu_ack` | out | 操作完成应答 |
 
 > **写操作要点：** 写地址(0x12) → 写数据(0x13) → **写使能脉冲(0x11)**，顺序不可颠倒。
+> **ivenv 要点:** 所有 Verilog 文件 `.v` 必须使用 `timescale 1ns / 1ns`（非 `1ps`），否则 iverilog 11.0 会将 `1ps` 当作时间单位导致延时扩大 1000 倍。
+
+---
+
+## 附录 B：仿真文件结构
+
+### 目录结构
+
+```
+test/lcpu_rgmii/
+├── SIM/                          # LCPU Write 独立仿真
+│   ├── tb_lcpu_write.v           # 写测试台（LCPU BFM tasks → cpu_channel_reg → cpu_channel）
+│   ├── run_sim.sh                # 编译运行脚本
+│   ├── bfm_cmds.txt              # BFM 命令参考
+│   └── bfm_cmds_write.txt        # 写命令参考
+│
+├── lcpu_sim/                     # LCPU 完整仿真 (读+写+回环)
+│   ├── cpu_channel_reg.v         # 寄存器桥 (原始文件, 未修改)
+│   ├── jtag_cpu_amd_core.v       # JTAG→LCPU 桥 (原始文件)
+│   ├── jtagCPU_Amd_Test_Top.v    # 顶层封装: BFM/硬件模式 + cpu_channel_reg
+│   ├── lcpu_bfm.v                # LCPU BFM ($fgets+$sscanf 纯 Verilog)
+│   ├── read.tcl                  # BFM 读包命令 (4字节示例)
+│   ├── test_cmds.txt             # BFM 完整测试命令 (329条, TX写68B→回环→RX读)
+│   ├── tb_lcpu_read.v            # 读测试台 + 回环测试台
+│   ├── tb_write.v                # 读写联合测试台 (inline LCPU tasks)
+│   ├── tb_lcpu_read.gtkw         # 波形信号配置
+│   └── run_read_sim.sh           # 编译运行脚本
+│
+└── TCL/
+    ├── full_test.tcl             # 完整自闭环测试 (TCL proc, 仅 JTAG 硬件使用)
+    ├── read_cpu_pkt.tcl          # 读包 TCL 过程
+    ├── write_cpu_pkt.tcl         # 写包 TCL 过程
+    └── send_my_pkt.tcl           # 发包 TCL
+```
+
+### jtagCPU_Amd_Test_Top 架构
+
+```
+jtagCPU_Amd_Test_Top (sim_mod=1 仿真模式)
+├── lcpu_bfm (delay=5000)        ← 读 test_cmds.txt, 驱动 LCPU bus
+└── cpu_channel_reg               ← 寄存器地址解码
+
+外部连接:
+  cpu_channel                     ← 数据通路 (RX FIFO + TX FIFO + filter)
+```
+
+### LCPU BFM 命令格式
+
+```
+jread  <addr>                     # 读寄存器
+jwrite <addr> <data>             # 写寄存器
+```
+
+BFM 逐行读取命令文件，通过 REQ→ACK 握手驱动 LCPU bus。支持 `#` 注释行。
+
+### 关键仿真发现
+
+| 问题 | 根因 | 解决 |
+|------|------|------|
+| 仿真延时异常 (1000x) | iverilog 11.0 `timescale 1ns/1ps` bug | 全部改为 `timescale 1ns/1ns` |
+| BFM 极慢 (>1s/命令) | `$fgetc` 逐字符读文件 | 改用 `$fgets`+`$sscanf` 批量解析 |
+| cpu_rd_empty 恒为 1 | dual_clock_fifo CDC 同步器无复位 (X propagation) | 设计问题, 跳过 empty 检查直接 pop 可读到数据 |
+| 帧长计数偏差 | SOP+EN 同拍时 rx_byte_cnt 从 1 开始 (ram2pktfifo_int 时序) | 帧长 ≤ 60 字节时不触发 filter, 数据正确 |
+| LCPU 写 wen 脉宽过大 | `lcpu_req` 保持 1 跨多周期 (timeout_ack 机制) | 连续 REQ 保持 + 逐拍更换 address/wdata 实现单周期脉冲 |
+| 回环仿真 TX→RX 数据通路正常 | mac_tx → mac_rx 直连 | 数据完整从 TX 写入→回环→RX 读出 |
+
+### 运行方式
+
+```bash
+# LCPU Write 仿真
+cd test/lcpu_rgmii/SIM && ./run_sim.sh run
+
+# LCPU Read + Loopback 仿真
+cd test/lcpu_rgmii/lcpu_sim && ./run_read_sim.sh run
+
+# 打开波形
+gtkwave tb_lcpu_read.vcd tb_lcpu_read.gtkw
+```

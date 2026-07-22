@@ -1,0 +1,54 @@
+[*]
+[*] GTKWave Analyzer v3.3
+[*]
+[dumpfile] "tb_write.vcd"
+[savefile] "tb_write.gtkw"
+[timestart] 0
+[zoom] 50
+[size] 1920 1080
+[fontname] "Monospace 10"
+
+[treeopen] tb_write
+
+#==== LCPU 总线 (cpu_clk 50MHz) ====
+tb_write.cpu_clk
+tb_write.reset_l
+tb_write.lcpu_req
+tb_write.lcpu_rh_wl
+tb_write.lcpu_address[31:0]
+tb_write.lcpu_wdata[31:0]
+tb_write.lcpu_rdata[31:0]
+tb_write.lcpu_ack
+
+#==== RX 读通路 ====
+[treeopen] RX_Read
+tb_write.ce
+tb_write.rpop
+tb_write.rlen[11:0]
+tb_write.rren
+tb_write.raddr[10:0]
+tb_write.rrdata[7:0]
+
+#==== TX 写通路 ====
+[treeopen] TX_Write
+tb_write.wfull
+tb_write.wwen
+tb_write.waddr[10:0]
+tb_write.wdata[7:0]
+tb_write.wpush
+tb_write.wplen[11:0]
+
+#==== mac_rx 输入 (clk 125MHz) ====
+[treeopen] MAC_RX
+tb_write.clk
+tb_write.mac_rx_sop
+tb_write.mac_rx_en
+tb_write.mac_rx_data[7:0]
+tb_write.mac_rx_eop
+
+#==== mac_tx 输出 ====
+[treeopen] MAC_TX
+tb_write.mac_tx_sop
+tb_write.mac_tx_en
+tb_write.mac_tx_data[7:0]
+tb_write.mac_tx_eop

@@ -1,0 +1,15 @@
+[*]
+@4200000
+u_dut.mac_rx_sop
+u_dut.mac_rx_en
+u_dut.mac_rx_data[7:0]
+u_dut.mac_rx_eop
+@8400000
+u_dut.cpu_rd_empty
+u_dut.cpu_rd_rpkt_pop
+u_dut.cpu_rd_rpkt_len[11:0]
+u_dut.cpu_rd_ren
+u_dut.cpu_rd_raddr[10:0]
+u_dut.cpu_rd_rdata[7:0]
+[ColorFmt]
+u_dut.cpu_rd_rdata[7:0] Hex
