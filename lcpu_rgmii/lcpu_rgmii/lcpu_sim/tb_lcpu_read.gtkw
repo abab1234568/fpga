@@ -1,0 +1,49 @@
+[*]
+[*] GTKWave Analyzer v3.3
+[*]
+[dumpfile] "tb_lcpu_read.vcd"
+[savefile] "tb_lcpu_read.gtkw"
+[timestart] 0
+[zoom] 50
+[size] 1920 1080
+[fontname] "Monospace 10"
+[signal_stdout] 0
+[pattern_trace] 1
+
+[treeopen] tb_lcpu_read
+
+#==== LCPU 总线 (cpu_clk 50MHz) ====
+[color] cycle
+tb_lcpu_read.cpu_clk
+tb_lcpu_read.reset_l
+tb_lcpu_read.lcpu_req
+tb_lcpu_read.lcpu_rh_wl
+tb_lcpu_read.lcpu_address[31:0]
+tb_lcpu_read.lcpu_wdata[31:0]
+tb_lcpu_read.lcpu_rdata[31:0]
+tb_lcpu_read.lcpu_ack
+
+#==== RX 读寄存器 (cpu_channel_reg → cpu_channel) ====
+[treeopen] RX_Read_Path
+tb_lcpu_read.cpu_rd_empty
+tb_lcpu_read.cpu_rd_rpkt_pop
+tb_lcpu_read.cpu_rd_rpkt_pop_ind
+tb_lcpu_read.cpu_rd_rpkt_len_32[11:0]
+tb_lcpu_read.cpu_rd_ren
+tb_lcpu_read.cpu_rd_raddr_32[10:0]
+tb_lcpu_read.cpu_rd_rdata_32[7:0]
+
+#==== mac_rx 帧输入 (clk 125MHz) ====
+[treeopen] MAC_RX_Input
+tb_lcpu_read.clk
+tb_lcpu_read.mac_rx_sop
+tb_lcpu_read.mac_rx_en
+tb_lcpu_read.mac_rx_data[7:0]
+tb_lcpu_read.mac_rx_eop
+
+#==== mac_tx 输出 ====
+[treeopen] MAC_TX_Output
+tb_lcpu_read.mac_tx_sop
+tb_lcpu_read.mac_tx_en
+tb_lcpu_read.mac_tx_data[7:0]
+tb_lcpu_read.mac_tx_eop

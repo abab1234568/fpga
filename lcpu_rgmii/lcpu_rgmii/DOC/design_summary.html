@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RGMII → GMII 回环 + cpu_channel + LCPU JTAG 读包</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card-bg: #fff;
+    --text: #222;
+    --muted: #555;
+    --border: #ddd;
+    --accent: #0366d6;
+    --code-bg: #e8e8e8;
+    --pre-bg: #1e1e1e;
+    --pre-fg: #d4d4d4;
+    --th-bg: #f0f0f0;
+    --blockquote-bg: #f0f5ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --code-bg: #343941;
+      --pre-bg: #161b22;
+      --pre-fg: #c9d1d9;
+      --th-bg: #21262d;
+      --blockquote-bg: #161b22;
+    }
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 1000px;
+    margin: 40px auto;
+    padding: 24px 48px;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+  }
+  h1 { font-size: 1.8em; border-bottom: 3px solid var(--accent); padding-bottom: 8px; }
+  h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 1.6em; }
+  h3 { font-size: 1.15em; margin-top: 1.3em; }
+  h4 { font-size: 1.05em; }
+
+  /* 代码块 */
+  pre {
+    background: var(--pre-bg);
+    color: var(--pre-fg);
+    padding: 16px 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.88em;
+    line-height: 1.55;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+  }
+
+  /* 表格 */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--th-bg);
+    font-weight: 600;
+  }
+
+  /* 引用 */
+  blockquote {
+    border-left: 4px solid var(--accent);
+    margin: 0;
+    padding: 6px 18px;
+    color: var(--muted);
+    background: var(--blockquote-bg);
+    border-radius: 0 6px 6px 0;
+  }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  ul, ol { padding-left: 1.6em; }
+
+  /* 图片自适应 */
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+
+  /* 打印样式 */
+  @media print {
+    body { max-width: none; margin: 0; padding: 16px 24px; font-size: 11pt; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+  }
+</style>
+</head>
+<body>
+<h1>RGMII → GMII 回环 + cpu_channel + LCPU JTAG 读包</h1>
+<blockquote>
+<p><strong>版本:</strong> v1.3 | <strong>日期:</strong> 2026-07-09 | <strong>作者:</strong> huaming.huang@link-real.com.cn</p>
+</blockquote>
+<hr />
+<h2>1. 架构总览</h2>
+<pre class="codehilite"><code> RGMII PHY ──▶ Bridge ──▶ gmii2mac ──▶ cpu_channel ──▶ gmii2mac ──▶ Bridge ──▶ PHY
+  (RTL8211)   (DDR↔SDR)   (CDC+前导码  (过滤+FIFO+    (CRC+前导码  (SDR↔DDR)
+                           +CRC RX/TX)  透传回环)      插入)
+
+                              │                              │
+                         cpu_channel_reg ◀── LCPU bus ── jtag_cpu_amd_core ◀── JTAG ── PC
+</code></pre>
+
+<p><strong>6 个顶层模块:</strong></p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>模块</th>
+<th>文件</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>mmcm_50_125</code></td>
+<td><code>rtl/rgmii2gmii/mmcm_50_125.v</code></td>
+<td>50MHz→125MHz/200MHz/125MHz_tx</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>rgmii_gmii_bridge</code></td>
+<td><code>rtl/rgmii2gmii/*.v</code></td>
+<td>RGMII DDR ↔ GMII SDR</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>gmii2mac</code></td>
+<td><code>rtl/mac/gmii2mac.v</code></td>
+<td>CDC + 前导码剥离/插入 + CRC校验/插入</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>cpu_channel</code></td>
+<td><code>rtl/cpu/cpu_channel.v</code></td>
+<td>全帧缓存 + 多字节过滤 + FIFO + 透传回环</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>jtag_cpu_amd_core</code></td>
+<td><code>rtl/AMD/RTL/*.v</code></td>
+<td>JTAG→AXI4-Lite→LCPU bus</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>cpu_channel_reg</code></td>
+<td><code>rtl/cpu/cpu_channel_reg.v</code></td>
+<td>LCPU bus → 寄存器桥</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>2. 数据通路</h2>
+<h3>RX 方向</h3>
+<pre class="codehilite"><code>RGMII PHY (DDR, 125MHz)
+  │ rgmii_rxc/rxd[3:0]/rx_ctl
+  ▼
+rgmii_gmii_bridge  ── IDELAYE2+IDDR ──▶ GMII (SDR, 8bit)
+  │ gmii_rx_dv, gmii_rxd[7:0], gmii_rx_er  (gmii_rx_clk 域)
+  ▼
+gmii2mac:
+  u_rx_asyncfifo   ── CDC gmii_rx_clk→clk_125m (10bit {ER,DV,DATA})
+  u_eth_presemble  ── 剥离前导码 (7×0x55 + 0xD5)
+  u_mac_top/u_mac_rx ── CRC32 校验, 输出 sop/eop
+  │ mac_rx_sop/en/data[7:0]/eop/err  (clk_125m 域)
+  ▼
+cpu_channel:
+  frame_buf       ── Block RAM 全帧缓存
+  多字节窗口过滤  ── filter_data[15]=en, [14:8]=match, [7:0]=mask
+                    filter_offset[15:8]=start, [7:0]=count
+  extract SM      ── EOP+frame_hit→逐字节搬入 ram2pktfifo_int
+  ram2pktfifo_int ── 打拍计算 wpkt_len
+  package_fifo_v2 ── RX: clk_125m→cpu_clk (双时钟 CDC)
+  │ cpu_rd_empty/rpkt_len/rdata[...]  (cpu_clk 域)
+  ▼
+cpu_channel_reg ── lcpu_rdata[31:0]/lcpu_ack
+  │ lcpu_req/rh_wl/address[31:0]
+  ▼
+jtag_cpu_amd_core ── JTAG ──▶ PC (Vivado HW Manager)
+</code></pre>
+
+<h3>TX 方向 (回环)</h3>
+<pre class="codehilite"><code>cpu_channel 内部:
+  mac_rx_en/data/err ──▶ 透传延迟线(4拍) ──▶ MUX(CPU优先) ──▶ sop_eop_gen
+  cpu_wr_*           ──▶ package_fifo_v2 ──▶ pktfifo2ram_int_v2 ──┘
+  │ cpu_tx_sop/en/data[7:0]/eop/err  (clk_125m 域)
+  ▼
+gmii2mac:
+  u_mac_top/u_mac_tx   ── CRC32 插入
+  u_eth_presemble      ── 插入前导码
+  │ gmii_tx_en, gmii_txd[7:0]  (clk_125m 域)
+  ▼
+rgmii_gmii_bridge  ── ODDR ──▶ RGMII PHY
+</code></pre>
+
+<hr />
+<h2>3. 时钟域</h2>
+<table>
+<thead>
+<tr>
+<th>时钟</th>
+<th>频率</th>
+<th>来源</th>
+<th>使用者</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clk_50m</code></td>
+<td>50MHz</td>
+<td>板载晶振</td>
+<td><code>mmcm_50_125</code> 输入</td>
+</tr>
+<tr>
+<td><code>clk_125m</code></td>
+<td>125MHz</td>
+<td>MMCM CLKOUT0</td>
+<td><code>gmii2mac</code>, <code>cpu_channel</code> 数据面, ILA</td>
+</tr>
+<tr>
+<td><code>clk_200m</code></td>
+<td>200MHz</td>
+<td>MMCM CLKOUT1</td>
+<td>IDELAYCTRL 参考</td>
+</tr>
+<tr>
+<td><code>clk_125m_tx</code></td>
+<td>125MHz (90°)</td>
+<td>MMCM CLKOUT2</td>
+<td>GMII TX 时钟</td>
+</tr>
+<tr>
+<td><code>gmii_rx_clk</code></td>
+<td>125MHz</td>
+<td>RGMII RXC→BUFG</td>
+<td>gmii2mac 内部 CDC 写侧</td>
+</tr>
+<tr>
+<td><code>cpu_clk</code></td>
+<td>50MHz</td>
+<td>外部</td>
+<td><code>jtag_cpu_amd_core</code>, <code>cpu_channel_reg</code>, <code>cpu_channel.cpu_rd_*</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>4. LCPU 寄存器映射</h2>
+<table>
+<thead>
+<tr>
+<th>地址</th>
+<th>名称</th>
+<th>R/W</th>
+<th>位段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>STATUS</td>
+<td>R</td>
+<td><code>[7:0]</code> drop_cnt</td>
+<td>丢包计数</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>PKT_LEN</td>
+<td>R</td>
+<td><code>[11:0]</code> rpkt_len</td>
+<td>当前包长度 (pop后有效)</td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>RD_DATA</td>
+<td>R</td>
+<td><code>[7:0]</code> rdata</td>
+<td>读1字节 (raddr自动++)</td>
+</tr>
+<tr>
+<td><code>0x0C</code></td>
+<td>CONTROL</td>
+<td>R/W</td>
+<td><code>[0]</code> pop, <code>[1]</code> bypass</td>
+<td>弹出包 / 旁路过滤</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>FILTER_CFG</td>
+<td>R/W</td>
+<td><code>[15]</code> en, <code>[14:8]</code> match, <code>[7:0]</code> mask</td>
+<td>多字节窗口掩码过滤</td>
+</tr>
+<tr>
+<td><code>0x14</code></td>
+<td>FILTER_OFS</td>
+<td>R/W</td>
+<td><code>[15:8]</code> start, <code>[7:0]</code> count</td>
+<td>过滤窗口位置+长度</td>
+</tr>
+<tr>
+<td><code>0x18</code></td>
+<td>EXTRACT_OFS</td>
+<td>R/W</td>
+<td><code>[10:0]</code> offset</td>
+<td>提取偏移 (预留)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>5. ILA 观测 (7 Probe / 122 bits)</h2>
+<table>
+<thead>
+<tr>
+<th>Probe</th>
+<th>位宽</th>
+<th>信号</th>
+<th>位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>10</td>
+<td><code>{gmii_rx_dv, gmii_rx_er, gmii_rxd[7:0]}</code></td>
+<td><strong>GMII 接口处</strong> — bridge 输出, 含前导码</td>
+</tr>
+<tr>
+<td>1</td>
+<td>12</td>
+<td><code>{mac_rx_sop, mac_rx_en, mac_rx_data[7:0], mac_rx_eop, mac_rx_err}</code></td>
+<td><strong>FIFO入口</strong> — CRC校验后 sop/eop, 去前导码</td>
+</tr>
+<tr>
+<td>2</td>
+<td>12</td>
+<td><code>{cpu_tx_sop, cpu_tx_en, cpu_tx_data[7:0], cpu_tx_eop, cpu_tx_err}</code></td>
+<td><strong>回环出口</strong> — 透传/CPU注入后</td>
+</tr>
+<tr>
+<td>3</td>
+<td>9</td>
+<td><code>{gmii_tx_en, gmii_txd[7:0]}</code></td>
+<td><strong>GMII 出口</strong> — 即将进 bridge, 含新CRC+前导码</td>
+</tr>
+<tr>
+<td>4</td>
+<td>32</td>
+<td><code>rx_stat_good_pkt[31:0]</code></td>
+<td><strong>统计</strong> — CRC正确包累加</td>
+</tr>
+<tr>
+<td>5</td>
+<td>23</td>
+<td><code>{cpu_rd_empty, cpu_rd_rpkt_len[11:0], frame_hit, reg_bypass_mode, pkt_drop_cnt[7:0]}</code></td>
+<td><strong>CPU状态</strong> — FIFO空/包长/命中/bypass/丢包</td>
+</tr>
+<tr>
+<td>6</td>
+<td>24</td>
+<td><code>{dbg_extract_active, dbg_fifo_full, dbg_fifo_wen, dbg_fifo_wdata[7:0], dbg_fifo_wpkt_push, dbg_fifo_wpkt_len[11:0]}</code></td>
+<td><strong>FIFO写入</strong> — extract SM逐字节写入 package_fifo_v2</td>
+</tr>
+</tbody>
+</table>
+<h3>ILA 波形解读</h3>
+<pre class="codehilite"><code>probe0: dv ──‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾______  每帧含前导码 55 55 55 55 55 55 55 D5
+probe1: sop ──‾\__________________________  帧起始 (DA 首字节)
+        en  ──‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__  帧数据有效 (已去前导码, 含 FCS)
+        eop ──________________________‾\__  帧结束 (FCS 末字节)
+        err ──__________________________/‾\  CRC 错误 (eop 时有效)
+probe2: 与 probe1 对齐但延迟约4拍 (透传回环)
+probe3: 比 probe2 多 8B 前导码 + 4B 新 CRC
+probe4: 每个 probe1.eop 且 err=0 后 +1
+probe5: empty=0 → FIFO 有包可读; frame_hit↗ → 过滤命中
+probe6: extract_active=1 时 wen 脉冲 N 次 (N=帧长), wdata 逐字节写入
+</code></pre>
+
+<hr />
+<h2>6. 文件清单</h2>
+<pre class="codehilite"><code>rtl/
+├── rgmii_gmii_loopback_top.v     ← 顶层
+├── dual_clock_fifo.v
+│
+├── rgmii2gmii/                   ← 物理层
+│   ├── mmcm_50_125.v
+│   ├── gmii_rgmii_bridge.v
+│   ├── gmii_to_rgmii.v
+│   ├── rgmii_to_gmii.v
+│   └── simple_dual_port_ram.v
+│
+├── mac/                          ← MAC 层
+│   ├── gmii2mac.v
+│   ├── eth_presemble.v
+│   ├── mac_top.v
+│   ├── mac_rx.v
+│   ├── mac_tx.v
+│   ├── crc.v
+│   ├── sop_eop_gen.v
+│   └── fix_delay.v
+│
+├── cpu/                          ← CPU 通道层
+│   ├── cpu_channel.v             (v3.2)
+│   ├── cpu_channel_reg.v
+│   ├── ram2pktfifo_int.v
+│   ├── package_fifo.v
+│   ├── pktfifo2ram_int_v2.v
+│   ├── single_clock_fifo.v
+│   └── pulse_clock_region_pass.v
+│
+└── AMD/RTL/                      ← JTAG 调试层
+    ├── jtag_cpu_amd_core.v
+    ├── axi2lcpu.v
+    └── jtag_axi_0.xci
+</code></pre>
+
+<hr />
+<h2>7. 构建步骤</h2>
+<pre class="codehilite"><code>1. 打开 Vivado 项目 lcpu_rgmii.xpr
+
+2. 生成 ILA IP (TCL Console):
+      source create_ila.tcl
+
+3. Run Synthesis
+
+4. Run Implementation → Generate Bitstream
+
+5. Program Device → 下载到 FPGA
+
+6. 连接 JTAG (Vivado HW Manager):
+      source AMD/TCL/lcpu_start.tcl
+      lcpu_quick_test
+</code></pre>
+
+<hr />
+<h2>8. TCL 抓包操作</h2>
+<pre class="codehilite"><code class="language-tcl"># 打开 Hardware Manager 后
+source LCPU_AMD_Driver.tcl
+source lcpu_capture.tcl
+
+lcpu_status              # 查看寄存器状态
+filter_pass_all           # 全放行
+lcpu_capture_once        # 单次抓包
+lcpu_monitor             # 持续监控
+lcpu_help                # 帮助
+</code></pre>
+
+<hr />
+<h2>9. cpu_channel 过滤配置</h2>
+<p><strong>位域定义:</strong></p>
+<table>
+<thead>
+<tr>
+<th>寄存器</th>
+<th>位</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FILTER_CFG</code></td>
+<td><code>[15]</code></td>
+<td>过滤使能 (0=全放行)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>[14:8]</code></td>
+<td>匹配值 (7-bit)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>[7:0]</code></td>
+<td>掩码 (bit=1 检查, bit=0 忽略)</td>
+</tr>
+<tr>
+<td><code>FILTER_OFS</code></td>
+<td><code>[15:8]</code></td>
+<td>起始字节偏移</td>
+</tr>
+<tr>
+<td></td>
+<td><code>[7:0]</code></td>
+<td>检查字节数</td>
+</tr>
+</tbody>
+</table>
+<p><strong>匹配逻辑:</strong> 窗口 <code>[start, start+count)</code> 内所有字节 <code>(data &amp; mask) == (match &amp; mask)</code> 同时成立</p>
+<p><strong>配置示例:</strong></p>
+<pre class="codehilite"><code class="language-tcl"># IPv4 (EtherType=0x0800, 检查 byte13=0x00)
+reg_write 0x10 0x80FF   # FILTER_CFG: en=1, match=0x00, mask=0xFF
+reg_write 0x14 0x0D01   # FILTER_OFS: start=13, count=1
+
+# 放行所有
+reg_write 0x0C 0x02     # CONTROL: bypass=1
+
+# ARP (EtherType=0x0806)
+reg_write 0x10 0x8006   # FILTER_CFG: en=1, match=0x00, mask=0x06
+reg_write 0x14 0x0D02   # FILTER_OFS: start=13, count=2
+</code></pre>
+
+<hr />
+<h2>10. 顶层端口</h2>
+<table>
+<thead>
+<tr>
+<th>端口</th>
+<th>方向</th>
+<th>位宽</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rgmii_txc/txd/tx_ctl</code></td>
+<td>out</td>
+<td>1+4+1</td>
+<td>RGMII TX</td>
+</tr>
+<tr>
+<td><code>rgmii_rxc/rxd/rx_ctl</code></td>
+<td>in</td>
+<td>1+4+1</td>
+<td>RGMII RX</td>
+</tr>
+<tr>
+<td><code>clk_50m</code></td>
+<td>in</td>
+<td>1</td>
+<td>板载晶振</td>
+</tr>
+<tr>
+<td><code>cpu_clk</code></td>
+<td>in</td>
+<td>1</td>
+<td>LCPU 时钟</td>
+</tr>
+<tr>
+<td><code>rst_n</code></td>
+<td>in</td>
+<td>1</td>
+<td>异步复位</td>
+</tr>
+<tr>
+<td><code>phy_rst_n</code></td>
+<td>out</td>
+<td>1</td>
+<td>PHY 复位 (MMCM锁定后~16ms释放)</td>
+</tr>
+<tr>
+<td><code>mmcm_locked</code></td>
+<td>out</td>
+<td>1</td>
+<td>PLL 锁定</td>
+</tr>
+<tr>
+<td><code>led[1:0]</code></td>
+<td>out</td>
+<td>2</td>
+<td>LED[0]=锁定, LED[1]=FIFO有包</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

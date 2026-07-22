@@ -1,3 +1,7 @@
+# Simulation waveforms
+*.vcd
+*.vvp
+
 # Vivado project files (generated)
 *.jou
 *.log

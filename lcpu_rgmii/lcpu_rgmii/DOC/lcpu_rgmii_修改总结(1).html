@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>lcpu_rgmii 修改总结</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card-bg: #fff;
+    --text: #222;
+    --muted: #555;
+    --border: #ddd;
+    --accent: #0366d6;
+    --code-bg: #e8e8e8;
+    --pre-bg: #1e1e1e;
+    --pre-fg: #d4d4d4;
+    --th-bg: #f0f0f0;
+    --blockquote-bg: #f0f5ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --code-bg: #343941;
+      --pre-bg: #161b22;
+      --pre-fg: #c9d1d9;
+      --th-bg: #21262d;
+      --blockquote-bg: #161b22;
+    }
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 1000px;
+    margin: 40px auto;
+    padding: 24px 48px;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+  }
+  h1 { font-size: 1.8em; border-bottom: 3px solid var(--accent); padding-bottom: 8px; }
+  h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 1.6em; }
+  h3 { font-size: 1.15em; margin-top: 1.3em; }
+  h4 { font-size: 1.05em; }
+
+  /* 代码块 */
+  pre {
+    background: var(--pre-bg);
+    color: var(--pre-fg);
+    padding: 16px 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.88em;
+    line-height: 1.55;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+  }
+
+  /* 表格 */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--th-bg);
+    font-weight: 600;
+  }
+
+  /* 引用 */
+  blockquote {
+    border-left: 4px solid var(--accent);
+    margin: 0;
+    padding: 6px 18px;
+    color: var(--muted);
+    background: var(--blockquote-bg);
+    border-radius: 0 6px 6px 0;
+  }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  ul, ol { padding-left: 1.6em; }
+
+  /* 图片自适应 */
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+
+  /* 打印样式 */
+  @media print {
+    body { max-width: none; margin: 0; padding: 16px 24px; font-size: 11pt; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+  }
+</style>
+</head>
+<body>
+<h1>lcpu_rgmii 修改总结</h1>
+<blockquote>
+<p>日期: 2026-07-13</p>
+</blockquote>
+<hr />
+<h2>cpu_channel.v — 解决帧首字节丢失 (核心修复)</h2>
+<p><strong>问题</strong>：SOP 同拍若 EN 有效，<code>rx_byte_cnt</code> 的 NBA 复位未生效就被 EN 分支用作写入地址，导致 byte0 写入错误地
+址、帧长少 1。</p>
+<p><strong>修复</strong>：<code>if-else-if</code> 结构，SOP 分支内检查是否同时有 EN：</p>
+<pre class="codehilite"><code class="language-verilog">if (mac_rx_sop) begin
+    if (mac_rx_en) begin
+        frame_buf[0] &lt;= mac_rx_data;   // 直写地址0
+        rx_byte_cnt &lt;= 1'b1;           // 下一拍写到frame_buf[1]
+    end else begin
+        rx_byte_cnt &lt;= 0;              // 纯SOP, 只复位
+    end
+end else if (mac_rx_en) begin
+    frame_buf[rx_byte_cnt] &lt;= mac_rx_data;
+    rx_byte_cnt &lt;= rx_byte_cnt + 1;
+end
+</code></pre>
+
+<hr />
+<h2>cpu_channel.v — 其他修复</h2>
+<table>
+<thead>
+<tr>
+<th>修复</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(* ram_style = "block" *)</code></td>
+<td>强制 Block RAM, 防资源超限</td>
+</tr>
+<tr>
+<td><code>(* DONT_TOUCH = "TRUE" *)</code> extract_rd_ptr</td>
+<td>防止 Vivado 优化</td>
+</tr>
+<tr>
+<td><code>synthesis DONT_TOUCH = 1</code> rx_byte_cnt</td>
+<td>防止 Vivado 优化</td>
+</tr>
+<tr>
+<td>双窗口过滤</td>
+<td>+filter_data2/filter_offset2 端口</td>
+</tr>
+<tr>
+<td>debug 输出端口</td>
+<td>dbg_extract_wen/wdata, dbg_mac_in_wen/wdata, dbg_rx_cnt_out</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>axi2lcpu.v — 解决 jwrite 失败</h2>
+<table>
+<thead>
+<tr>
+<th>修复</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>!m_axi_bready</code> → <code>!bvalid_r</code></td>
+<td>BVALID 竞态导致 AXI 写超时</td>
+</tr>
+<tr>
+<td><code>m_axi_bready &amp;&amp; bvalid_r</code></td>
+<td>BVALID 握手正确</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>mmcm_50_125.v — cpu_clk 内部生成</h2>
+<p>+CLKOUT3=50MHz (1000MHz/20) + BUFG，顶层不再需要外部 cpu_clk 引脚。</p>
+<hr />
+<h2>rgmii_gmii_loopback_top.v — 顶层适配</h2>
+<table>
+<thead>
+<tr>
+<th>改动</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>过滤常量</td>
+<td><code>F7FF/3D01/0000/0000</code> 双窗口</td>
+</tr>
+<tr>
+<td>cpu_clk 内部线</td>
+<td>删外部端口</td>
+</tr>
+<tr>
+<td>+phy_rst_n</td>
+<td>PHY 复位 ~16ms</td>
+</tr>
+<tr>
+<td>debug wire</td>
+<td>extract/mac_in/rx_cnt 引出接 ILA</td>
+</tr>
+<tr>
+<td>cpu_channel_reg 例化</td>
+<td>去 LCPU_TYPE, 32-bit wire 截断</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>lcpu_rgmii.xdc</h2>
+<table>
+<thead>
+<tr>
+<th>改动</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>+phy_rst_n (P14)</td>
+<td>PHY 复位引脚</td>
+</tr>
+<tr>
+<td>cpu_clk generated_clock</td>
+<td>MMCM CLKOUT3 BUFG</td>
+</tr>
+<tr>
+<td>时钟组 cpu_clk 归入 MMCM</td>
+<td></td>
+</tr>
+<tr>
+<td>get_ports 双花括号</td>
+<td>语法修复</td>
+</tr>
+<tr>
+<td>DRC UCIO-1/NSTD-1 抑制</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>最终 ILA 配置</h2>
+<table>
+<thead>
+<tr>
+<th>probe</th>
+<th>信号</th>
+<th>宽度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>mac_rx_sop/en/eop/err/data[7:0]</td>
+<td>12</td>
+</tr>
+<tr>
+<td>1</td>
+<td>dbg_frame_hit, dbg_extract_active, dbg_extract_wen, dbg_extract_wdata[7:0]</td>
+<td>11</td>
+</tr>
+<tr>
+<td>2</td>
+<td>dbg_mac_in_wen, dbg_mac_in_wpkt_push, dbg_mac_in_wdata[7:0]</td>
+<td>10</td>
+</tr>
+<tr>
+<td>3</td>
+<td>cpu_tx_sop/en/eop/err/data[7:0]</td>
+<td>12</td>
+</tr>
+<tr>
+<td>4</td>
+<td>gmii_tx_en, gmii_txd[7:0]</td>
+<td>9</td>
+</tr>
+<tr>
+<td>5</td>
+<td>cpu_rd_empty_sync, dbg_rx_cnt_out[10:0]</td>
+<td>12</td>
+</tr>
+</tbody>
+</table>
+<p>触发: probe0[11] = mac_rx_sop = R, Pre-trigger 64</p>
+<hr />
+<h2>已验证功能</h2>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>验证方式</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RGMII→GMII 接收 + 前导码剥离</td>
+<td>ILA probe0/6</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>CRC32 校验 (mac_rx)</td>
+<td>ILA mac_rx_err=0</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>双窗口硬件过滤 (byte61=0x77)</td>
+<td>LED1 亮 / ILA frame_hit</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>帧缓冲写入 (frame_buf)</td>
+<td>仿真 byte[0]=0x30</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>提取搬运 → RX FIFO</td>
+<td>ILA mac_in_wpkt_push 脉冲</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>LCPU 读 FIFO (jread 0x05)</td>
+<td>PKT_LEN=68, byte[0]=0x30</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>LCPU 写 FIFO → mac_tx</td>
+<td>ILA probe3 cpu_tx_sop</td>
+<td>待测</td>
+</tr>
+<tr>
+<td>RGMII 直接回环</td>
+<td>probe3 cpu_tx_en=0 时 probe4 有数据</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>PHY 复位</td>
+<td>LED0/LED2 亮</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>axi2lcpu jwrite 修复</td>
+<td>AXI 写不再超时</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>cpu_clk 内部生成 (MMCM CLKOUT3)</td>
+<td>不依赖外部引脚</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<p><strong>不验证 / 无需验证</strong>：短帧过滤 (window1_visited)、BRAM→寄存器→BRAM 改动历史、仿真与硬件差异（已知 iverilog 不模拟 BRAM 读延迟）。</p>
+</body>
+</html>

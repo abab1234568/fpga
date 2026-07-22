@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RGMII 数据通路开发文档</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card-bg: #fff;
+    --text: #222;
+    --muted: #555;
+    --border: #ddd;
+    --accent: #0366d6;
+    --code-bg: #e8e8e8;
+    --pre-bg: #1e1e1e;
+    --pre-fg: #d4d4d4;
+    --th-bg: #f0f0f0;
+    --blockquote-bg: #f0f5ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --code-bg: #343941;
+      --pre-bg: #161b22;
+      --pre-fg: #c9d1d9;
+      --th-bg: #21262d;
+      --blockquote-bg: #161b22;
+    }
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 1000px;
+    margin: 40px auto;
+    padding: 24px 48px;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+  }
+  h1 { font-size: 1.8em; border-bottom: 3px solid var(--accent); padding-bottom: 8px; }
+  h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 1.6em; }
+  h3 { font-size: 1.15em; margin-top: 1.3em; }
+  h4 { font-size: 1.05em; }
+
+  /* 代码块 */
+  pre {
+    background: var(--pre-bg);
+    color: var(--pre-fg);
+    padding: 16px 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.88em;
+    line-height: 1.55;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
+  }
+
+  /* 表格 */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--th-bg);
+    font-weight: 600;
+  }
+
+  /* 引用 */
+  blockquote {
+    border-left: 4px solid var(--accent);
+    margin: 0;
+    padding: 6px 18px;
+    color: var(--muted);
+    background: var(--blockquote-bg);
+    border-radius: 0 6px 6px 0;
+  }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  ul, ol { padding-left: 1.6em; }
+
+  /* 图片自适应 */
+  img { max-width: 100%; height: auto; border-radius: 6px; }
+
+  /* 打印样式 */
+  @media print {
+    body { max-width: none; margin: 0; padding: 16px 24px; font-size: 11pt; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+  }
+</style>
+</head>
+<body>
+<h1>RGMII 数据通路开发文档</h1>
+<blockquote>
+<p>项目: lcpu_rgmii | 日期: 2026-07-10 | 版本: v1.0</p>
+</blockquote>
+<hr />
+<h2>1. 文档概述</h2>
+<p>本文档描述 FPGA 内 RGMII 以太网帧的完整数据通路，包含 6 段：</p>
+<table>
+<thead>
+<tr>
+<th>段</th>
+<th>名称</th>
+<th>方向</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>PC → MAC RX</td>
+<td>PHY→FPGA</td>
+<td>RGMII 接收、前导码剥离、CRC32 校验</td>
+</tr>
+<tr>
+<td>2</td>
+<td>MAC RX → FIFO</td>
+<td>FPGA 内部</td>
+<td>全帧缓存、多字节过滤、包 FIFO 写入</td>
+</tr>
+<tr>
+<td>3</td>
+<td>LCPU 读 FIFO</td>
+<td>FPGA→PC(JTAG)</td>
+<td>PC 通过 JTAG 寄存器逐字节读取包数据</td>
+</tr>
+<tr>
+<td>4</td>
+<td>LCPU 写 FIFO</td>
+<td>PC(JTAG)→FPGA</td>
+<td>PC 通过 JTAG 寄存器逐字节注入包数据</td>
+</tr>
+<tr>
+<td>5</td>
+<td>FIFO → MAC TX</td>
+<td>FPGA 内部</td>
+<td>包 FIFO 读出、CRC32 生成、前导码插入</td>
+</tr>
+<tr>
+<td>6</td>
+<td>MAC TX → PC</td>
+<td>FPGA→PHY</td>
+<td>GMII SDR→RGMII DDR 转换、以太网发送</td>
+</tr>
+</tbody>
+</table>
+<p><strong>涉及模块:</strong> <code>rgmii_gmii_loopback_top</code>、<code>rgmii_gmii_bridge</code>、<code>gmii2mac</code>、<code>cpu_channel</code>、<code>Lcpu_Top</code></p>
+<p><strong>时钟域:</strong> <code>gmii_rx_clk</code>(125MHz)、<code>clk_125m</code>(125MHz)、<code>cpu_clk</code>(50MHz, =clk_50m 内部直连)</p>
+<hr />
+<h2>2. 模块接口信号</h2>
+<h3>2.1 PC → MAC RX (第 1 段)</h3>
+<table>
+<thead>
+<tr>
+<th>信号</th>
+<th>位宽</th>
+<th>I/O</th>
+<th>时钟域</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rgmii_rxc</code></td>
+<td>1</td>
+<td>in</td>
+<td>—</td>
+<td>PHY RX 时钟 125MHz</td>
+</tr>
+<tr>
+<td><code>rgmii_rxd</code></td>
+<td>4</td>
+<td>in</td>
+<td>—</td>
+<td>PHY RX DDR 数据</td>
+</tr>
+<tr>
+<td><code>rgmii_rx_ctl</code></td>
+<td>1</td>
+<td>in</td>
+<td>—</td>
+<td>PHY RX DDR 控制</td>
+</tr>
+<tr>
+<td><code>gmii_rx_clk</code></td>
+<td>1</td>
+<td>out</td>
+<td>gmii_rx_clk</td>
+<td>BUFG 后 RX 时钟</td>
+</tr>
+<tr>
+<td><code>gmii_rxd</code></td>
+<td>8</td>
+<td>out</td>
+<td>gmii_rx_clk</td>
+<td>GMII SDR 字节</td>
+</tr>
+<tr>
+<td><code>gmii_rx_dv</code></td>
+<td>1</td>
+<td>out</td>
+<td>gmii_rx_clk</td>
+<td>数据有效</td>
+</tr>
+<tr>
+<td><code>gmii_rx_er</code></td>
+<td>1</td>
+<td>out</td>
+<td>gmii_rx_clk</td>
+<td>RX 错误</td>
+</tr>
+<tr>
+<td><code>mac_rx_sop</code></td>
+<td>1</td>
+<td>out</td>
+<td>clk_125m</td>
+<td>帧起始脉冲</td>
+</tr>
+<tr>
+<td><code>mac_rx_en</code></td>
+<td>1</td>
+<td>out</td>
+<td>clk_125m</td>
+<td>数据有效</td>
+</tr>
+<tr>
+<td><code>mac_rx_data</code></td>
+<td>8</td>
+<td>out</td>
+<td>clk_125m</td>
+<td>帧字节(已去前导码)</td>
+</tr>
+<tr>
+<td><code>mac_rx_eop</code></td>
+<td>1</td>
+<td>out</td>
+<td>clk_125m</td>
+<td>帧结束脉冲</td>
+</tr>
+<tr>
+<td><code>mac_rx_err</code></td>
+<td>1</td>
+<td>out</td>
+<td>clk_125m</td>
+<td>CRC 错误(eop时)</td>
+</tr>
+</tbody>
+</table>
+<h3>2.2 MAC RX → FIFO (第 2 段)</h3>
+<table>
+<thead>
+<tr>
+<th>信号</th>
+<th>位宽</th>
+<th>I/O</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mac_rx_sop</code></td>
+<td>1</td>
+<td>in</td>
+<td>来自 mac_rx</td>
+</tr>
+<tr>
+<td><code>mac_rx_en</code></td>
+<td>1</td>
+<td>in</td>
+<td>数据有效</td>
+</tr>
+<tr>
+<td><code>mac_rx_data</code></td>
+<td>8</td>
+<td>in</td>
+<td>帧字节(含FCS)</td>
+</tr>
+<tr>
+<td><code>mac_rx_eop</code></td>
+<td>1</td>
+<td>in</td>
+<td>帧结束</td>
+</tr>
+<tr>
+<td><code>mac_rx_err</code></td>
+<td>1</td>
+<td>in</td>
+<td>CRC 错误</td>
+</tr>
+<tr>
+<td><code>filter_data</code></td>
+<td>16</td>
+<td>in</td>
+<td>[15]=en [14:8]=match [7:0]=mask</td>
+</tr>
+<tr>
+<td><code>filter_offset</code></td>
+<td>16</td>
+<td>in</td>
+<td>[15:8]=start [7:0]=count</td>
+</tr>
+<tr>
+<td><code>bypass_mode</code></td>
+<td>1</td>
+<td>in</td>
+<td>1=全放行</td>
+</tr>
+<tr>
+<td><code>frame_hit</code></td>
+<td>1</td>
+<td>out</td>
+<td>过滤命中</td>
+</tr>
+<tr>
+<td><code>cpu_rd_empty</code></td>
+<td>1</td>
+<td>out</td>
+<td>FIFO 空</td>
+</tr>
+<tr>
+<td><code>cpu_rd_rpkt_len</code></td>
+<td>32</td>
+<td>out</td>
+<td>包长度(pop后)</td>
+</tr>
+</tbody>
+</table>
+<h3>2.3 LCPU 读 FIFO (第 3 段)</h3>
+<table>
+<thead>
+<tr>
+<th>地址</th>
+<th>名称</th>
+<th>R/W</th>
+<th>信号</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>EMPTY</td>
+<td>R</td>
+<td><code>cpu_rd_empty</code></td>
+<td>bit0=0 有包</td>
+</tr>
+<tr>
+<td>0x01</td>
+<td>POP</td>
+<td>R/W</td>
+<td><code>cpu_rd_rpkt_pop</code></td>
+<td>bit0=1 弹出包</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>LEN</td>
+<td>R</td>
+<td><code>cpu_rd_rpkt_len</code></td>
+<td>包长度(68)</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>REN</td>
+<td>R/W</td>
+<td><code>cpu_rd_ren</code></td>
+<td>bit0=1 读使能</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>RADDR</td>
+<td>R/W</td>
+<td><code>cpu_rd_raddr</code></td>
+<td>读地址(包内偏移)</td>
+</tr>
+<tr>
+<td>0x05</td>
+<td>RDATA</td>
+<td>R</td>
+<td><code>cpu_rd_rdata</code></td>
+<td>读出的1字节</td>
+</tr>
+</tbody>
+</table>
+<h3>2.4 LCPU 写 FIFO (第 4 段)</h3>
+<table>
+<thead>
+<tr>
+<th>地址</th>
+<th>名称</th>
+<th>R/W</th>
+<th>信号</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x10</td>
+<td>WR_FULL</td>
+<td>R</td>
+<td><code>cpu_wr_full</code></td>
+<td>bit0=1 FIFO满</td>
+</tr>
+<tr>
+<td>0x11</td>
+<td>WR_WEN</td>
+<td>R/W</td>
+<td><code>cpu_wr_wen</code></td>
+<td>bit0=1 写使能脉冲</td>
+</tr>
+<tr>
+<td>0x12</td>
+<td>WR_WADDR</td>
+<td>R/W</td>
+<td><code>cpu_wr_waddr</code></td>
+<td>写地址(包内偏移)</td>
+</tr>
+<tr>
+<td>0x13</td>
+<td>WR_WDATA</td>
+<td>R/W</td>
+<td><code>cpu_wr_wdata</code></td>
+<td>写数据(1字节)</td>
+</tr>
+<tr>
+<td>0x14</td>
+<td>WR_LEN</td>
+<td>R/W</td>
+<td><code>cpu_wr_wpkt_len</code></td>
+<td>包长度(68)</td>
+</tr>
+<tr>
+<td>0x15</td>
+<td>WR_PUSH</td>
+<td>R/W</td>
+<td><code>cpu_wr_wpkt_push</code></td>
+<td>bit0=1 包推送脉冲</td>
+</tr>
+</tbody>
+</table>
+<h3>2.5 FIFO → MAC TX (第 5 段)</h3>
+<table>
+<thead>
+<tr>
+<th>信号</th>
+<th>位宽</th>
+<th>I/O</th>
+<th>时钟域</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cpu_tx_sop</code></td>
+<td>1</td>
+<td>in</td>
+<td>clk_125m</td>
+<td>TX 帧起始</td>
+</tr>
+<tr>
+<td><code>cpu_tx_en</code></td>
+<td>1</td>
+<td>in</td>
+<td>clk_125m</td>
+<td>TX 数据有效</td>
+</tr>
+<tr>
+<td><code>cpu_tx_data</code></td>
+<td>8</td>
+<td>in</td>
+<td>clk_125m</td>
+<td>TX 字节</td>
+</tr>
+<tr>
+<td><code>cpu_tx_eop</code></td>
+<td>1</td>
+<td>in</td>
+<td>clk_125m</td>
+<td>TX 帧结束</td>
+</tr>
+<tr>
+<td><code>gmii_txd</code></td>
+<td>8</td>
+<td>out</td>
+<td>clk_125m</td>
+<td>GMII TX SDR 字节</td>
+</tr>
+<tr>
+<td><code>gmii_tx_en</code></td>
+<td>1</td>
+<td>out</td>
+<td>clk_125m</td>
+<td>GMII TX 有效</td>
+</tr>
+</tbody>
+</table>
+<h3>2.6 MAC TX → PC (第 6 段)</h3>
+<table>
+<thead>
+<tr>
+<th>信号</th>
+<th>位宽</th>
+<th>I/O</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gmii_txd</code></td>
+<td>8</td>
+<td>in</td>
+<td>GMII SDR 输入</td>
+</tr>
+<tr>
+<td><code>gmii_tx_en</code></td>
+<td>1</td>
+<td>in</td>
+<td>TX 数据有效</td>
+</tr>
+<tr>
+<td><code>rgmii_txc</code></td>
+<td>1</td>
+<td>out</td>
+<td>TX 时钟 125MHz</td>
+</tr>
+<tr>
+<td><code>rgmii_txd</code></td>
+<td>4</td>
+<td>out</td>
+<td>TX DDR 数据</td>
+</tr>
+<tr>
+<td><code>rgmii_tx_ctl</code></td>
+<td>1</td>
+<td>out</td>
+<td>TX DDR 控制</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>3. 功能描述与定义</h2>
+<h3>3.1 PC → MAC RX</h3>
+<p><strong>数据路径:</strong></p>
+<pre class="codehilite"><code>PC 以太网帧 → RTL8211 PHY → RGMII DDR → rgmii_gmii_bridge (DDR→SDR)
+→ gmii2mac (CDC→前导码剥离→CRC32校验) → mac_rx_sop/en/data/eop/err
+</code></pre>
+
+<p><strong>子模块链:</strong>
+1. <strong>rgmii_to_gmii</strong>: IDELAYE2(20tap≈1.56ns延迟补偿) → IDDR(SAME_EDGE_PIPELINED, DDR→SDR) → BUFG
+2. <strong>dual_clock_fifo</strong>: 10bit={ER,DV,DATA}, CDC gmii_rx_clk→clk_125m, 16深
+3. <strong>eth_presemble</strong>: 字节0-6检测0x55, 字节7检测0xD5, <code>rx_valid_header=1</code>后透传
+4. <strong>mac_rx</strong>: CRC32校验 → sop_eop_gen输出包格式</p>
+<p><strong>CRC32 校验定义:</strong>
+- 多项式: <code>x^32+x^26+x^23+x^22+x^16+x^12+x^11+x^10+x^8+x^7+x^5+x^4+x^2+x+1</code>
+- 初始值: <code>32'hFFFFFFFF</code>
+- 覆盖范围: DA(6B)+SA(6B)+Type(2B)+Payload+FCS(4B) 全部
+- Magic Residue: <code>32'h1cdf4421</code> — 对含正确FCS的帧做CRC, 残余恒为此值
+- 正确判断: <code>crc_err = (crc_out == 32'h1cdf4421) ? 0 : crc_done</code></p>
+<h3>3.2 MAC RX → FIFO</h3>
+<p><strong>数据路径:</strong></p>
+<pre class="codehilite"><code>mac_rx_sop/en/data/eop/err → cpu_channel (RX_PREAMBLE_STRIP=0)
+  1. 前导码跳过: 已剥离, 直通
+  2. frame_buf: Block RAM 全帧缓存(2048深度)
+  3. 多字节窗口掩码过滤 → frame_hit
+  4. extract SM: frame_hit_rising→逐字节搬入 ram2pktfifo_int
+  5. ram2pktfifo_int: 打拍计长度→wpkt_push
+  6. package_fifo_v2: dual_clock=1, clk_125m→cpu_clk
+</code></pre>
+
+<p><strong>过滤定义 (v4.0 — 双窗口硬接线):</strong></p>
+<pre class="codehilite"><code>窗口1: start=61, count=1, match=0x77, mask=0xFF  → byte61 == 'w'
+窗口2: start=23, count=1, match=0x11, mask=0xFF  → byte23 == UDP
+
+两个窗口都命中 → all_bytes_match1 &amp;&amp; all_bytes_match2 → frame_hit=1
+任一不命中 → 帧丢弃, 不进 FIFO
+</code></pre>
+
+<p>RTL 顶层硬接线, 不需要 LCPU 寄存器配:</p>
+<pre class="codehilite"><code class="language-verilog">// filter_data = {enable[15], match_val[14:8], mask[7:0]}
+// filter_offset = {start[15:8], count[7:0]}
+
+.filter_data   (16'hF7FF)  // 窗口1: en=1, match=0x77, mask=0xFF
+.filter_offset (16'h3D01)  // 窗口1: start=61, count=1
+.filter_data2  (16'h91FF)  // 窗口2: en=1, match=0x11, mask=0xFF
+.filter_offset2(16'h1701)  // 窗口2: start=23, count=1
+</code></pre>
+
+<table>
+<thead>
+<tr>
+<th>窗口</th>
+<th>值</th>
+<th>位域分解</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>F7FF</code></td>
+<td>en=1, match=7'h77, mask=8'hFF</td>
+<td>byte61 必须等于 0x77 ('w')</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>91FF</code></td>
+<td>en=1, match=7'h11, mask=8'hFF</td>
+<td>byte23 必须等于 0x11 (UDP)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>参考帧结构 (UDP, 68字节):</strong></p>
+<pre class="codehilite"><code>偏移  值              字段
+ 0-5  9c 2d cd ac 8f a4  DA         ← 锁①
+ 6-11 9c 69 d3 7d 47 4c  SA
+12-13 08 00              Type = IPv4
+14-33 45 00 00 32 ...     IPv4 头 (20B)
+  23  11                 Protocol = UDP
+26-29 a9 fe fc f8        Src IP     ← 锁②
+34-41 05 21 27 15 ...     UDP 头 (8B)
+36-37 27 15              Dst Port   ← 锁③
+42-60 30×19              Payload (0x30 × 19)
+  61  77                 'w' ← 硬件过滤点
+  62  7a                 'z'
+  63  68                 'h'
+64-67 ?? ?? ?? ??         FCS (CRC32)
+</code></pre>
+
+<p><strong>CRC32帧尾:</strong>
+- frame_buf存储含原始4字节FCS
+- wpkt_len = data_bytes + 4 (例: 64+4=68)
+- CRC校验结果在mac_rx_err中(err=0正确)</p>
+<h3>3.3 LCPU 读 FIFO</h3>
+<p><strong>数据路径:</strong></p>
+<pre class="codehilite"><code>PC(JTAG) → jtag_axi_0 → AXI4-Lite → axi2lcpu → LCPU bus
+→ cpu_channel_reg → cpu_channel.cpu_rd_* → package_fifo_v2(读侧)
+</code></pre>
+
+<p><strong>TCL 操作流程:</strong></p>
+<pre class="codehilite"><code class="language-tcl"># 1. 等包
+set empty [jread 0x00]     # bit0=0 有包
+
+# 2. 弹出包
+jwrite 0x01 1               # rpkt_pop=1
+
+# 3. 读包长度
+set len [jread 0x02]        # 68 (64 data + 4 FCS)
+
+# 4. 逐字节读
+for {set i 0} {$i &lt; $len} {incr i} {
+    jwrite 0x04 $i           # 设 raddr
+    jwrite 0x03 1            # ren=1
+    set b [jread 0x05]       # 读 rdata
+    jwrite 0x03 0            # ren=0
+}
+</code></pre>
+
+<h3>3.4 LCPU 写 FIFO</h3>
+<p><strong>数据路径:</strong></p>
+<pre class="codehilite"><code>PC(JTAG) → cpu_channel_reg → cpu_channel.cpu_wr_*
+→ package_fifo_v2(TX, cpu_clk→clk_125m, dual_clock=1)
+→ 数据写入 simple_dual_port_ram
+wpkt_push → 锁存包参数
+</code></pre>
+
+<p><strong>TCL 操作流程 (先设 wdata/waddr, 再 wen 脉冲):</strong></p>
+<pre class="codehilite"><code class="language-tcl"># 68 字节帧 (64 data + 4 FCS)
+for {set i 0} {$i &lt; 68} {incr i} {
+    jwrite 0x13 $byte        # 1. 设 wdata
+    jwrite 0x12 $i           # 2. 设 waddr
+    jwrite 0x11 0x01         # 3. wen=1 脉冲 → 写入1字节
+}
+
+# 全部字节写完后
+jwrite 0x14 68               # 4. wpkt_len = 68
+jwrite 0x15 0x01             # 5. wpkt_push → 推入 FIFO
+</code></pre>
+
+<h3>3.5 FIFO → MAC TX</h3>
+<p><strong>数据路径:</strong></p>
+<pre class="codehilite"><code>package_fifo_v2(TX读侧) → pktfifo2ram_int_v2
+  - empty=0 &amp;&amp; IPG满 → 自动 rpkt_pop
+  - 锁存 rpkt_len, ren=1, raddr 0→len-1 自增
+  - ram_wen=ren → 字节流 cpu_tx_en, cpu_tx_data
+
+sop_eop_gen:
+  cpu_tx_en 流 → cpu_tx_sop(上升沿) + cpu_tx_eop(下降沿)
+
+mac_tx:
+  fix_delay(4拍,9bit) → crc.v(CRC32计算) → 4拍FCS插入
+  → gmii_tx_en, gmii_txd[7:0]
+</code></pre>
+
+<p><strong>CRC32 生成定义:</strong>
+- crc.v: <code>crc_type=0, data_in_width=8</code>
+- 输入: <code>data_in_en = data_o_en &amp; data_o_en_d</code>, <code>data_in = data_o_d[7:0]</code>
+- 覆盖范围: DA+SA+Type+Payload (不含旧FCS), 共60字节
+- 输出: <code>crc_done</code> → 4拍 <code>crc_insert</code> 移位 → tx_data替换为crc[31:24][23:16][15:8][7:0]
+- <strong>mac_tx 重新计算并覆盖帧尾最后4字节</strong></p>
+<h3>3.6 MAC TX → PC</h3>
+<p><strong>数据路径:</strong></p>
+<pre class="codehilite"><code>gmii_tx_en, gmii_txd[7:0]
+→ eth_presemble(tx_presemble_en=1, 插入8B前导码 55×7+D5)
+→ gmii_to_rgmii (ODDR×6, SDR→DDR)
+→ RGMII TXC/TXD[3:0]/TX_CTL → RTL8211 PHY → Ethernet → PC
+</code></pre>
+
+<hr />
+<h2>4. 状态机设计</h2>
+<h3>4.1 eth_presemble — RX 前导码检测 (第 1 段)</h3>
+<p>隐式FSM (字节计数器实现):</p>
+<pre class="codehilite"><code>rx_eth_byte_cnt:
+  rx_data_en_in=0 → 清零
+  rx_data_en_in=1 → 自增
+
+  0≤cnt&lt;7: 期望 data==0x55, 记录到 rx_premble[cnt]
+  cnt==7:   rx_premble==7'b111_1111 &amp;&amp; data==0xD5 → rx_valid_header=1
+  cnt≥7:    rx_valid_header=1 → 透传
+
+异常: 前导码非0x55或SFD非0xD5 → rx_valid_header=0 → 帧丢弃
+</code></pre>
+
+<h3>4.2 extract SM — 帧搬移 (第 2 段)</h3>
+<p>2态FSM:</p>
+<pre class="codehilite"><code>IDLE ──frame_hit_rising──▶ ACTIVE
+  ↑                          │
+  └──extract_rd_ptr==len-1──┘
+
+IDLE:
+  extract_ram_wen=0, rd_ptr=0, wr_addr=0
+  frame_hit_rising → extract_active=1, extract_len=frame_len
+
+ACTIVE:
+  mac_in_full=0 → wen=1, wdata=frame_buf[rd_ptr], wr_addr++, rd_ptr++
+  mac_in_full=1 → wen=0 (背压暂停)
+  rd_ptr==len-1 → extract_active=0 (下一拍)
+</code></pre>
+
+<h3>4.3 axi2lcpu — AXI→LCPU 桥 (第 3/4 段)</h3>
+<p>3态FSM:</p>
+<pre class="codehilite"><code>IDLE ──aw_hs||ar_hs──▶ WAIT ──lcpu_ack──▶ DONE ──bready||r_hs──▶ IDLE
+
+IDLE:  等AXI写地址+数据或读地址 → 发起lcpu_req
+WAIT:  等lcpu_ack
+DONE:  写→返回B响应, 读→锁存rdata→返回R响应
+</code></pre>
+
+<h3>4.4 cpu_channel_reg — LCPU 总线协议 (第 3/4 段)</h3>
+<p>超时保护:</p>
+<pre class="codehilite"><code>is_req: req上升沿→锁存为1
+is_req_cnt: is_req=1时自增, ≥0x0008→timeout_ack=1, is_req=0
+ack: timeout_ack | reg_ack
+rdata: timeout→DEADDEAD, reg_ack→reg_rdata
+</code></pre>
+
+<hr />
+<h2>5. 时序说明与时序图</h2>
+<h3>5.1 PC → MAC RX (第 1 段) — 全接口</h3>
+<pre class="codehilite"><code>rgmii_rxc:    _/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_
+rgmii_rxd:    __55_55_55_55_55_55_55_D5_DA_SA_Type_Payload__________________________FCS3_____________
+rgmii_rx_ctl: ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__________
+                                                                              ↑ dv=1 期间数据有效
+
+gmii_rx_clk:  _/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_
+gmii_rxd:     __55_55_55_55_55_55_55_D5_DA_SA_Type_Payload__________________________FCS3_____________
+gmii_rx_dv:   ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__________
+gmii_rx_er:   ______________________________________________________________________________________
+
+mac_rx_sop:   ________________________/‾\___________________________________________________________
+mac_rx_en:    ________________________/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\______
+mac_rx_data:  ________________________DA_SA_Type_Payload_______________________________FCS0_FCS1_FCS2_FCS3_
+mac_rx_eop:   ________________________________________________________________________/‾\_____________
+mac_rx_err:   ________________________________________________________________________/‾\_____________
+                                                                                      ↑ 0=CRC正确 1=错误
+</code></pre>
+
+<h3>5.2 MAC RX → FIFO (第 2 段) — 全接口</h3>
+<pre class="codehilite"><code>mac_rx_sop:       __________/‾\______________
+mac_rx_en:        __________/‾‾‾‾‾‾‾‾‾‾‾‾‾\___
+mac_rx_data:      __________DA_SA_...FCS_____
+mac_rx_eop:       _____________________/‾\_____
+mac_rx_err:       _____________________/‾\_____
+filter_enable:    _____________________________  (来自 filter_data[15])
+bypass_mode:      _____________________________  (1=全放行)
+
+frame_hit:        _____________________/‾\_____  (EOP时: all_match &amp;&amp; enable &amp;&amp; !bypass)
+extract_active:   _____________________/‾‾‾‾‾\_
+extract_ram_wen:  _____________________/‾\_/‾\_/‾\_/‾\_
+extract_wdata:    _____________________DA_SA_Type_...FCS_
+
+wpkt_push:       _______________________________/‾\_
+wpkt_len:        _______________________________│68│_
+
+cpu_rd_empty:     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\_____________  (cpu_clk域: 0=有包可读)
+cpu_rd_rpkt_len:  XXXXXXXXXXXXXXXXXXXXXXXXXX│68│____  (cpu_clk域: pop后有效)
+</code></pre>
+
+<h3>5.3 LCPU 读 FIFO (第 3 段) — 全接口</h3>
+<pre class="codehilite"><code>cpu_rd_empty:     ‾‾\____________________________  (0=有包, 可读)
+
+jwrite 0x01 1 (pop):
+cpu_rd_rpkt_pop:  __________/‾\___________________  (弹出包脉冲)
+
+cpu_rd_rpkt_len:  XXXXXXXXXX│68│__________________  (pop后有效)
+
+for i=0,1,2...67:
+  jwrite 0x04 i (设raddr):
+  cpu_rd_raddr:   __________│ 0 │_____│ 1 │______  (设读地址)
+
+  jwrite 0x03 1 (ren=1):
+  cpu_rd_ren:     __________/‾‾‾\______/‾‾‾\_____  (读使能)
+
+  jread 0x05 (读rdata):
+  cpu_rd_rdata:   ______________│D0│______│D1 │__  (2拍后数据有效)
+
+  jwrite 0x03 0 (ren=0):
+  cpu_rd_ren:     __________/‾‾‾‾‾‾‾\_____________  (关读使能)
+</code></pre>
+
+<h3>5.4 LCPU 写 FIFO (第 4 段) — 全接口</h3>
+<pre class="codehilite"><code>cpu_wr_full:      ________________________________  (0=可写)
+
+for i=0,1,2...67:
+  jwrite 0x13 byte (设wdata):
+  cpu_wr_wdata:   __________│D0│_____│D1 │_______  (先设写数据)
+
+  jwrite 0x12 i (设waddr):
+  cpu_wr_waddr:   __________│ 0 │_____│ 1 │_______  (再设写地址)
+
+  jwrite 0x11 0x01 (wen脉冲):
+  cpu_wr_wen:     __________/‾\_______/‾\__________  (最后脉冲 → 写入1字节)
+
+...全部68字节写完后:
+
+  jwrite 0x14 68 (设包长度):
+  cpu_wr_wpkt_len:   ______________________│68│______
+
+  jwrite 0x15 0x01 (推送):
+  cpu_wr_wpkt_push:  ______________________/‾\_________
+</code></pre>
+
+<h3>5.5 FIFO → MAC TX (第 5 段) — 全接口</h3>
+<pre class="codehilite"><code>cpu_tx_sop:      ________________/‾\________________
+cpu_tx_en:       ________________/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\___
+cpu_tx_data:     ________________DA_SA_...Payload_____
+cpu_tx_eop:      ________________________________/‾\__
+
+crc_done:        ________________________________/‾\__
+crc_insert[3]:   ________________________________/‾\_____ → tx_data = crc[31:24]
+crc_insert[2]:   _________________________________/‾\____ → tx_data = crc[23:16]
+crc_insert[1]:   __________________________________/‾\___ → tx_data = crc[15:8]
+crc_insert[0]:   ___________________________________/‾\__ → tx_data = crc[7:0]
+
+gmii_tx_en:      __/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\___  (比cpu_tx多了8B前导码+4B新FCS)
+gmii_txd:        __55_55_55_55_55_55_55_D5_DA_SA_..._crc31_crc23_crc15_crc7__
+gmii_tx_er:      ____________________________________________________________
+               ↑ 8B前导码(eth_presemble插入)                            ↑ 新FCS(mac_tx插入)
+</code></pre>
+
+<h3>5.6 MAC TX → PC (第 6 段) — 全接口</h3>
+<pre class="codehilite"><code>gmii_tx_en:      __/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\___
+gmii_txd:        __55_55_55_55_55_55_55_D5_DA_SA_Type_Payload_____crc31_..._crc7__
+gmii_tx_er:      __________________________________________________________________
+
+rgmii_txc:       _/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_/‾\_
+rgmii_txd:       __DA[3:0]_DA[7:4]_SA[3:0]_SA[7:4]_Type[3:0]_Type[7:4]_..._crc[3:0]_crc[7:4]__
+rgmii_tx_ctl:    __/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\__
+
+ODDR: posedge → gmii_txd[3:0] (低位)    negedge → gmii_txd[7:4] (高位)
+      posedge → TX_CTL = TX_EN          negedge → TX_CTL = TX_EN ^ TX_ER
+</code></pre>
+
+<hr />
+<h2>6. 实现细节</h2>
+<h3>6.1 CRC32 计算 (第 1/5 段)</h3>
+<p><strong>模块:</strong> <code>crc.v</code>, <code>crc_type=0, data_in_width=8</code></p>
+<p><strong>fun_crc32_d8:</strong> 组合逻辑, 1拍完成 8bit→32bit CRC更新:</p>
+<pre class="codehilite"><code>crc_next = f(data_in[7:0], crc_reg[31:0])
+每个 clk_en &amp;&amp; data_in_en → crc_reg &lt;= crc_next
+</code></pre>
+
+<p><strong>Magic Number:</strong>
+- 对含正确FCS的完整帧计算CRC32 → 残余恒为 <code>32'h1cdf4421</code>
+- <code>mac_rx</code> 判断: <code>crc_err = (crc_out==MAGIC) ? 0 : crc_done</code></p>
+<h3>6.2 FCS 插入 (第 5 段)</h3>
+<p>4拍crc_insert移位寄存器:</p>
+<pre class="codehilite"><code>crc_done → crc_insert=4'b1000 → crc_out_r锁存
+         → tx_data = crc_out_r[31:24]  (MSB first)
+crc_done+1 → crc_insert=4'b0100
+         → tx_data = crc_out_r[23:16]
+crc_done+2 → crc_insert=4'b0010
+         → tx_data = crc_out_r[15:8]
+crc_done+3 → crc_insert=4'b0001
+         → tx_data = crc_out_r[7:0]
+</code></pre>
+
+<h3>6.3 包长度计数 (第 2 段)</h3>
+<p><strong>ram2pktfifo_int:</strong></p>
+<pre class="codehilite"><code class="language-verilog">if (clk_en &amp;&amp; wen)  wpkt_len &lt;= wpkt_len + 1;
+else                wpkt_len &lt;= 0;
+wpkt_push &lt;= ~ram_wen &amp; wen;  // 下降沿
+</code></pre>
+
+<p>64字节payload + 4字节FCS = <strong>68字节</strong></p>
+<h3>6.4 过滤窗口匹配 (第 2 段)</h3>
+<pre class="codehilite"><code class="language-verilog">in_match_window = (rx_byte_cnt &gt;= start) &amp;&amp; (rx_byte_cnt &lt; start+count);
+byte_match = ((data &amp; mask) == (match_val &amp; mask));
+
+all_bytes_match: SOP→1, 窗口内任一不匹配→0
+frame_hit = all_bytes_match &amp;&amp; filter_enable &amp;&amp; !bypass; // EOP判断
+</code></pre>
+
+<h3>6.5 RGMII DDR 采样 (第 1/6 段)</h3>
+<p><strong>RX IDDR SAME_EDGE_PIPELINED:</strong>
+- Q1(posedge)=低位 → gmii_rxd[3:0]
+- Q2(negedge)=高位 → gmii_rxd[7:4]
+- gmii_rx_dv=Q1, gmii_rx_er=Q1^Q2</p>
+<p><strong>TX ODDR OPPOSITE_EDGE:</strong>
+- D1(posedge)=gmii_txd[3:0], D2(negedge)=gmii_txd[7:4]
+- TX_CTL: D1=TX_EN, D2=TX_EN^TX_ER</p>
+<hr />
+<h2>7. 注意事项</h2>
+<h3>7.1 时钟频率</h3>
+<table>
+<thead>
+<tr>
+<th>时钟</th>
+<th>频率</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clk_50m</code></td>
+<td>50MHz</td>
+<td>板载晶振, MMCM输入+LCPU时钟</td>
+</tr>
+<tr>
+<td><code>clk_125m</code></td>
+<td>125MHz</td>
+<td>MMCM CLKOUT0, 数据面主时钟</td>
+</tr>
+<tr>
+<td><code>clk_200m</code></td>
+<td>200MHz</td>
+<td>MMCM CLKOUT1, IDELAYCTRL参考</td>
+</tr>
+<tr>
+<td><code>clk_125m_tx</code></td>
+<td>125MHz(90°)</td>
+<td>MMCM CLKOUT2, RGMII TXC</td>
+</tr>
+<tr>
+<td><code>gmii_rx_clk</code></td>
+<td>125MHz</td>
+<td>PHY RXC恢复, 与clk_125m异步</td>
+</tr>
+<tr>
+<td><code>cpu_clk</code></td>
+<td>50MHz</td>
+<td>=clk_50m直连, LCPU子系统</td>
+</tr>
+</tbody>
+</table>
+<h3>7.2 包长度</h3>
+<ul>
+<li>最短: 64字节(含FCS)</li>
+<li>最长: 1518字节(标准MTU) / 2048字节(jumbo)</li>
+<li>CPU注入: wpkt_len = data_bytes + 4</li>
+<li>mac_tx 重新计算覆盖帧尾4字节FCS</li>
+</ul>
+<h3>7.3 LCPU 注意事项</h3>
+<ul>
+<li>req→ack超时: 8周期, 超时返回DEADDEAD</li>
+<li><code>cpu_rd_rdata</code>: ren=1后2拍有效</li>
+<li><code>cpu_wr_wen</code>: 脉冲后数据立即写入FIFO</li>
+<li><code>rpkt_pop</code>后 <code>rpkt_len</code> 下一拍有效</li>
+<li>跨时钟域: cpu_clk(50MHz)↔clk_125m(125MHz), package_fifo_v2内部CDC</li>
+</ul>
+<h3>7.4 ILA 观测</h3>
+<ul>
+<li>ILA时钟: clk_125m (125MHz)</li>
+<li>cpu_clk域信号(cpu_rd_empty/rpkt_len)异步采样不可靠</li>
+<li>gmii_rx_clk域信号(probe0)异步采样可能有亚稳态</li>
+<li>建议: cpu_clk域状态用LCPU寄存器读, 不要依赖ILA</li>
+</ul>
+<hr />
+<h2>8. 附录</h2>
+<h3>8.1 寄存器完整映射 (16 个)</h3>
+<table>
+<thead>
+<tr>
+<th>地址</th>
+<th>名称</th>
+<th>R/W</th>
+<th>信号</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>EMPTY</td>
+<td>R</td>
+<td>cpu_rd_empty</td>
+<td>bit0=0 有包</td>
+</tr>
+<tr>
+<td>0x01</td>
+<td>POP</td>
+<td>R/W</td>
+<td>cpu_rd_rpkt_pop</td>
+<td>bit0=1 弹出包</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>LEN</td>
+<td>R</td>
+<td>cpu_rd_rpkt_len</td>
+<td>包长度(pop后有效)</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>REN</td>
+<td>R/W</td>
+<td>cpu_rd_ren</td>
+<td>bit0=1 读使能</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>RADDR</td>
+<td>R/W</td>
+<td>cpu_rd_raddr</td>
+<td>读地址(包内偏移)</td>
+</tr>
+<tr>
+<td>0x05</td>
+<td>RDATA</td>
+<td>R</td>
+<td>cpu_rd_rdata</td>
+<td>读出的1字节</td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>WR_FULL</td>
+<td>R</td>
+<td>cpu_wr_full</td>
+<td>bit0=1 FIFO满</td>
+</tr>
+<tr>
+<td>0x11</td>
+<td>WR_WEN</td>
+<td>R/W</td>
+<td>cpu_wr_wen</td>
+<td>bit0=1 写使能脉冲</td>
+</tr>
+<tr>
+<td>0x12</td>
+<td>WR_WADDR</td>
+<td>R/W</td>
+<td>cpu_wr_waddr</td>
+<td>写地址</td>
+</tr>
+<tr>
+<td>0x13</td>
+<td>WR_WDATA</td>
+<td>R/W</td>
+<td>cpu_wr_wdata</td>
+<td>写数据(1字节)</td>
+</tr>
+<tr>
+<td>0x14</td>
+<td>WR_LEN</td>
+<td>R/W</td>
+<td>cpu_wr_wpkt_len</td>
+<td>写包长度</td>
+</tr>
+<tr>
+<td>0x15</td>
+<td>WR_PUSH</td>
+<td>R/W</td>
+<td>cpu_wr_wpkt_push</td>
+<td>bit0=1 包推送**</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>注: filter 不经过寄存器, 顶层直接硬接线到 cpu_channel。要改过滤规则需改 RTL 重综合。</p>
+</blockquote>
+<h3>8.2 TCL 抓包脚本</h3>
+<p><strong>脚本位置:</strong> <code>lcpu_filter_capture.tcl</code></p>
+<p><strong>使用:</strong></p>
+<pre class="codehilite"><code class="language-tcl">source /home/huamingh/work/FPGA_Prj/test/lcpu_rgmii/lcpu_filter_capture.tcl
+capture_print       # 单次抓包+打印帧详情
+monitor             # 持续监控
+flush               # 清空 FIFO
+</code></pre>
+
+<p><strong>过滤流程:</strong></p>
+<pre class="codehilite"><code>硬件 (RTL):  byte61 == 0x77  → 初筛, 挡 99.6% 流量
+                                      │
+LCPU (TCL): ① dstMAC = 9c:2d:cd:ac:8f:a4
+            ② srcIP  = a9.fe.fc.f8
+            ③ dstPort = 10005
+            → 全部匹配才打印
+</code></pre>
+
+<p><strong>手动操作序列:</strong></p>
+<pre class="codehilite"><code class="language-tcl"># 注: filter 已硬件接线 (byte61='w' + byte23=UDP), 不用寄存器配
+
+# ===== 读 FIFO =====
+while {[jread 0x00]} { after 100 }
+jwrite 0x01 1          # pop
+set len [jread 0x02]
+for {set i 0} {$i &lt; $len} {incr i} {
+    jwrite 0x04 $i; jwrite 0x03 1
+    set b [jread 0x05]; jwrite 0x03 0
+}
+
+# ===== LCPU 软件锁死 =====
+# 检查 dstMAC (byte 0-5), srcIP (byte 26-29), dstPort (byte 36-37)
+# 任一不匹配 → continue 读下一帧
+set dport [expr {[lindex $bytes 36]*256 + [lindex $bytes 37]}]
+if {$dport != 10005} { ... }
+
+# ===== 写 FIFO =====
+for {set i 0} {$i &lt; 68} {incr i} {
+    jwrite 0x13 $byte   # wdata 先设
+    jwrite 0x12 $i      # waddr
+    jwrite 0x11 0x01    # wen 脉冲
+}
+jwrite 0x14 68          # wpkt_len
+jwrite 0x15 0x01        # wpkt_push
+</code></pre>
+
+<h3>8.3 6段数据流总图</h3>
+<pre class="codehilite"><code>PC1 ──Eth──▶ PHY ──RGMII──▶ Bridge ──GMII──▶ gmii2mac
+                                                  │ CDC + 前导码 + CRC32
+                                                  ▼ mac_rx_sop/en/data/eop/err
+                                            cpu_channel
+                                           ┌──frame_buf→过滤→extract──┐
+                                           │                           │
+                                           ▼ cpu_rd_*          cpu_wr_* ▼
+                                      Lcpu_Top ◀──JTAG── PC2   Lcpu_Top
+                                           │                           │
+                                           │                    package_fifo(TX)
+                                           │                      │ pktfifo2ram
+                                           │                      ▼ cpu_tx_en/data
+                                           └──────────────────────────┘
+                                                                      │
+                                                                  mac_tx (CRC32)
+                                                                      │ gmii_tx
+                                                                  Bridge (SDR→DDR)
+                                                                      │ RGMII
+                                                                     PHY ──Eth──▶ PC2
+</code></pre>
+
+<hr />
+<blockquote>
+<p>文档结束</p>
+</blockquote>
+</body>
+</html>
